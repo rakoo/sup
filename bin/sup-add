@@ -26,6 +26,9 @@ For Maildir folders, use the form:
     maildir:<path to Maildir directory>; or
     maildir://<path to Maildir directory>
 
+For Gmail, use the form:
+    gmail://username@gmail.com
+
 Options are:
 EOS
   opt :archive, "Automatically archive all new messages from these sources."
@@ -41,7 +44,7 @@ Trollop::die "require one or more sources" if ARGV.empty?
 ## for sources that require login information, prompt the user for
 ## that. also provide a list of previously-defined login info to
 ## choose from, if any.
-def get_login_info uri, sources
+def get_login_info uri, sources = []
   uri = URI(uri)
   accounts = sources.map do |s|
     next unless s.respond_to?(:username)
@@ -103,6 +106,11 @@ begin
         Redwood::Maildir.new uri, !$opts[:unusual], $opts[:archive], $opts[:sync_back], nil, labels
       when "mbox"
         Redwood::MBox.new uri, !$opts[:unusual], $opts[:archive], nil, labels
+      when "gmail"
+        username = "#{parsed_uri.user}@#{parsed_uri.host}"
+        password = ask("Password for #{username}: ") { |q| q.echo = false }
+        puts # why?
+        Redwood::GMail.new uri, username, password.to_s, !$opts[:unusual], $opts[:archive], nil, labels
       when nil
         Trollop::die "Sources must be specified with an URI"
       else
