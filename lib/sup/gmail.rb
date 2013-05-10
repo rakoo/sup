@@ -7,6 +7,7 @@ require 'sup/monkey/imap'
 require 'leveldb'
 require 'rmail'
 require 'fileutils'
+require 'oj'
 
 module Redwood
 
@@ -63,19 +64,19 @@ class GMail < Source
   end
 
   def get_mailbox_uidlast(mailbox)
-    @db.get "#{mailbox}/uidlast"
+    leveldb_get("#{mailbox}/uidlast")
   end
 
   def set_mailbox_uidlast(mailbox, uidlast)
-    @db.put "#{mailbox}/uidlast", uidlast.to_s
+    leveldb_put("#{mailbox}/uidlast", uidlast)
   end
 
   def get_mailbox_uidvalidity(mailbox)
-    @db.get "#{mailbox}/uidvalidity"
+    leveldb_get("#{mailbox}/uidvalidity")
   end
 
   def set_mailbox_uidvalidity(mailbox, uidvalidity)
-    @db.put "#{mailbox}/uidvalidity", uidvalidity.to_s
+    leveldb_put("#{mailbox}/uidvalidity", uidvalidity)
   end
 
   def gmail_label_to_sup_label(label)
@@ -215,6 +216,20 @@ class GMail < Source
     @mutex.synchronize do
       @db.get("#{id}/body").gsub(/\r\n/, "\n")
     end
+  end
+
+  private
+
+  def leveldb_put(key, val)
+    @mutex.synchronize do
+      @db.put "key", Oj.dump(val)
+    end
+  end
+
+  def leveldb_get(key)
+    val = @db.get(key)
+    return nil if val.nil?
+    return Oj.load(val)
   end
 end
 
