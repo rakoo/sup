@@ -13,6 +13,9 @@ module Redwood
 class GMail < Source
   include SerializeLabelsNicely
 
+  FLAG_DESCRIPTORS = %w(UID FLAGS X-GM-LABELS X-GM-MSGID)
+  BODY_DESCRIPTORS = %w(RFC822.HEADER UID FLAGS X-GM-LABELS X-GM-MSGID RFC822)
+
   attr_accessor :username, :password
   yaml_properties :uri, :username, :password, :usual, :archived, :id, :labels
 
@@ -24,6 +27,8 @@ class GMail < Source
 
     @username = username
     @password = password
+    @port = 993
+    @ssl = true
     @mutex = Mutex.new
     @imap = nil
     @ids = []
@@ -35,71 +40,108 @@ class GMail < Source
     @db = LevelDB::DB.new @path
   end
 
+  def imap_login(host, username, password, port = 993, ssl = true)
+    debug "; connecting to gmail..."
+    begin
+      @imap = Net::IMAP.new host, :port => port, :ssl => ssl
+    rescue TypeError
+      # 1.8 compatibility. sigh.
+      @imap = Net::IMAP.new host, port, ssl
+    end
+    debug "; login as #{username} ..."
+    @imap.login username, password
+  end
+
+  def imap_logout
+    @imap.logout if @imap and ! @imap.disconnected?
+  end
+
+  # Returns an array of interesting mailboxes.
+  def imap_mailboxes
+    mailboxes = @imap.list "", "*"
+    mailboxes.select { |m| m.attr.include?(:All) }.map { |m| m.name }
+  end
+
+  def get_mailbox_uidlast(mailbox)
+    @db.get "#{mailbox}/uidlast"
+  end
+
+  def set_mailbox_uidlast(mailbox, uidlast)
+    @db.put "#{mailbox}/uidlast", uidlast.to_s
+  end
+
+  def get_mailbox_uidvalidity(mailbox)
+    @db.get "#{mailbox}/uidvalidity"
+  end
+
+  def set_mailbox_uidvalidity(mailbox, uidvalidity)
+    @db.put "#{mailbox}/uidvalidity", uidvalidity.to_s
+  end
+
+  def gmail_label_to_sup_label(label)
+    case label
+      when "Inbox"
+        :inbox
+      when "Sent"
+        :sent
+      when "Deleted"
+        :deleted
+      when "Flagged"
+        :starred
+      when "Draft"
+        :draft
+      when "Spam"
+        :spam
+      else
+        Net::IMAP.decode_utf7(label.to_s).to_sym
+    end
+  end
+
+  def imap_fetch_new_ids(mailbox)
+    info "; fetch new messages from #{mailbox}"
+    @imap.examine folder
+
+    uidvalidity = @imap.responses["UIDVALIDITY"].first
+    uidnext = @imap.responses["UIDNEXT"].first
+    uidvaliditylast = get_mailbox_uidvalidity(mailbox)
+    uidlast = get_mailbox_uidlast(mailbox).to_i
+
+    ids = []
+
+    if uidvalidity.to_s == uidvaliditylast
+      ids = ((uidlast + 1) .. (uidnext -1)).to_a
+      debug "; downloading new messages... (Total: #{ids.size}) [#{ids.first} .. #{ids.last}]"
+    elsif uidvaliditylast.nil?
+      ids = @imap.uid_search(["NOT", "DELETED"]) || []
+      set_mailbox_uidvalidity mailbox, uidvalidity
+      debug "; first time, downloading all messages... (Total: #{ids.size}) [#{ids.first} .. #{ids.last}]"
+    else
+      ids = @imap.uid_search(["NOT", "DELETED"]) || []
+      set_mailbox_uidvalidity mailbox, uidvalidity
+      debug "; uidvalidity mistmatch, downloading all messages again as punishment (Total: #{ids.size}) [#{ids.first} .. #{ids.last}]"
+    end
+    ids
+  end
+
   def poll
-    @running = true
-      info "Polling new messages for Gmail #{@username}"
+    info "Start poll for Gmail source #{@username}"
+    begin
+      imap_login("imap.gmail.com", @username, @password, @port, @ssl)
+      mailboxes = imap_mailboxes
+      mailboxes.each do |mailbox|
+        ids = imap_fetch_new_ids(mailbox)
+        while ! (range = ids.shift 20).empty?
+          query = range.first .. range.last
+          debug "; fetching messages #{query.inspect} from gmail server"
 
-      imap_fields = %w(RFC822.HEADER UID FLAGS X-GM-LABELS X-GM-MSGID RFC822)
-
-      begin
-        debug "; connection to gmail..."
-        begin
-          @imap = Net::IMAP.new "imap.gmail.com", :port => 993, :ssl => true
-        rescue TypeError
-          # 1.8 compatibility. sigh.
-          @imap = Net::IMAP.new "imap.gmail.com", 993, true
-        end
-
-        debug "; login as #{@username} ..."
-        @imap.login @username, @password
-
-        @imap.examine folder
-
-        debug "; open successfully"
-
-        @uidvalidity = @imap.responses["UIDVALIDITY"].first
-        @uidnext = @imap.responses["UIDNEXT"].first
-
-        debug "; server uidnext #{@uidnext} uidvalidity #{@uidvalidity}"
-
-        if self.uidvaliditylast.nil?
-          debug "; first time, downloading all messages"
-          @ids = @imap.uid_search(["NOT", "DELETED"]) || []
-          self.uidvaliditylast = @uidvalidity
-        else
-          debug "; check uidvalidity #{@uidvalidity} #{self.uidvaliditylast}"
-          raise OutOfSyncSourceError unless @uidvalidity.to_s == self.uidvaliditylast.to_s
-          debug "; check only for new messages"
-          @ids = ((self.uidlast + 1) .. (@uidnext -1)).to_a
-        end
-        debug "; got #{@ids.size} new messages [#{@ids.first} .. #{@ids.last}]"
-
-        while ! (ids = @ids.shift 20).empty?
-          @query = ids.first .. ids.last
-          debug "; requesting messages #{@query.inspect} from gmail server"
-
+          data = []
           Timeout.timeout(120) do
-            @data = @imap.uid_fetch(@query, imap_fields) || []
+            data = @imap.uid_fetch(query, BODY_DESCRIPTORS) || []
           end
 
-          @data.each_with_index do |msg,i|
+          data.each_with_index do |msg,i|
             labels = (msg.attr["X-GM-LABELS"] || []).map do |l|
-              case l
-              when "Inbox"
-                :inbox
-              when "Sent"
-                :sent
-              when "Deleted"
-                :deleted
-              when "Flagged"
-                :starred
-              when "Draft"
-                :draft
-              when "Spam"
-                :spam
-              else
-                Net::IMAP.decode_utf7(l.to_s).to_sym
-              end
+              gmail_label_to_sup_label(l)
             end
             flags = (msg.attr["FLAGS"] || []).map { |f| f.to_s.downcase.to_sym }
             labels += [:unread] unless flags.include?(:seen)
@@ -113,16 +155,13 @@ class GMail < Source
               :info => uid.to_i,
               :labels => Set.new(labels).merge(labels),
               :progress => i.to_f/@data.size
-            self.uidlast = msg.attr["UID"]
+            set_mailbox_uidlast(mailbox, msg.attr["UID"])
           end
-          break if ! @running
         end
-      rescue => e
-        raise FatalSourceError, "While communicating with GMail server (type #{e.class.name}): #{e.message.inspect}"
-      ensure
-        @imap.close if @imap
       end
-      nil
+    ensure
+      imap_logout
+    end
   end
 
   def go_idle
