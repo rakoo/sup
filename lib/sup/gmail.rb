@@ -191,22 +191,6 @@ class GMail < Source
     safely { @imap.append mailbox, message.string, [:Seen], Time.now }
   end
 
-  def uidvaliditylast
-    @db.get("uidvaliditylast")
-  end
-
-  def uidvaliditylast=(val)
-    @db.put "uidvaliditylast", val.to_s
-  end
-
-  def uidlast
-    @db.get("uidlast").to_i
-  end
-
-  def uidlast=(val)
-    @db.put "uidlast", val.to_s
-  end
-
   # Returns the all folder name.
   def folder
     return @folder if @folder
