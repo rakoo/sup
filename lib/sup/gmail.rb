@@ -221,7 +221,7 @@ class GMail < Source
 
   def leveldb_put(key, val)
     @mutex.synchronize do
-      @db.put "key", YAML::dump(val)
+      @db.put key, YAML::dump(val)
     end
   end
 
