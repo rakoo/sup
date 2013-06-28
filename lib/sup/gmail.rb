@@ -7,7 +7,6 @@ require 'sup/monkey/imap'
 require 'leveldb'
 require 'rmail'
 require 'fileutils'
-require 'oj'
 
 module Redwood
 
@@ -222,14 +221,14 @@ class GMail < Source
 
   def leveldb_put(key, val)
     @mutex.synchronize do
-      @db.put "key", Oj.dump(val)
+      @db.put "key", YAML::dump(val)
     end
   end
 
   def leveldb_get(key)
     val = @db.get(key)
     return nil if val.nil?
-    return Oj.load(val)
+    return YAML::load(val)
   end
 end
 
