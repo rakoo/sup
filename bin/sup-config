@@ -48,6 +48,7 @@ def add_source
     menu.prompt = "What type of mail source is it? "
     menu.choice("mbox file") { type = :mbox }
     menu.choice("maildir directory") { type = :maildir }
+    menu.choice("gmail account") { type = :gmail }
     menu.choice("Get me out of here!") { return }
   end
 
@@ -71,6 +72,11 @@ def add_source
       $last_fn = fn
       [Redwood::Maildir.suggest_labels_for(fn),
        { :scheme => "maildir", :path => fn }]
+    when :gmail
+      username = axe "What's your account name ?"
+      puts "Ok, got your username."
+      [Redwood::GMail.suggested_default_labels,
+        {:scheme => "gmail", :userinfo => username, :host => "gmail.com" }]
     end
 
     uri = begin
