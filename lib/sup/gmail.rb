@@ -4,6 +4,7 @@ require 'time'
 require 'set'
 require 'monitor'
 require 'sup/monkey/imap'
+require 'sup/monkey/set'
 require 'leveldb'
 require 'rmail'
 require 'fileutils'
@@ -40,89 +41,6 @@ class GMail < Source
     @db = LevelDB::DB.new @path
   end
 
-  def imap_login(host, username, password, port = 993, ssl = true)
-    debug "; connecting to gmail..."
-    begin
-      @imap = Net::IMAP.new host, :port => port, :ssl => ssl
-    rescue TypeError
-      # 1.8 compatibility. sigh.
-      @imap = Net::IMAP.new host, port, ssl
-    end
-    debug "; login as #{username} ..."
-    @imap.login username, password
-  end
-
-  def imap_logout
-    @imap.logout if @imap and ! @imap.disconnected?
-  end
-
-  # Returns an array of interesting mailboxes.
-  def imap_mailboxes
-    mailboxes = @imap.list "", "*"
-    mailboxes.select { |m| m.attr.include?(:All) }.map { |m| m.name }
-  end
-
-  def get_mailbox_uidlast(mailbox)
-    leveldb_get("#{mailbox}/uidlast")
-  end
-
-  def set_mailbox_uidlast(mailbox, uidlast)
-    leveldb_put("#{mailbox}/uidlast", uidlast)
-  end
-
-  def get_mailbox_uidvalidity(mailbox)
-    leveldb_get("#{mailbox}/uidvalidity")
-  end
-
-  def set_mailbox_uidvalidity(mailbox, uidvalidity)
-    leveldb_put("#{mailbox}/uidvalidity", uidvalidity)
-  end
-
-  def gmail_label_to_sup_label(label)
-    case label
-      when "Inbox"
-        :inbox
-      when "Sent"
-        :sent
-      when "Deleted"
-        :deleted
-      when "Flagged"
-        :starred
-      when "Draft"
-        :draft
-      when "Spam"
-        :spam
-      else
-        Net::IMAP.decode_utf7(label.to_s).to_sym
-    end
-  end
-
-  def imap_fetch_new_ids(mailbox)
-    info "; fetch new messages from #{mailbox}"
-    @imap.examine folder
-
-    uidvalidity = @imap.responses["UIDVALIDITY"].first
-    uidnext = @imap.responses["UIDNEXT"].first
-    uidvaliditylast = get_mailbox_uidvalidity(mailbox)
-    uidlast = get_mailbox_uidlast(mailbox).to_i
-
-    ids = []
-
-    if uidvalidity.to_s == uidvaliditylast
-      ids = ((uidlast + 1) .. (uidnext -1)).to_a
-      debug "; downloading new messages... (Total: #{ids.size}) [#{ids.first} .. #{ids.last}]"
-    elsif uidvaliditylast.nil?
-      ids = @imap.uid_search(["NOT", "DELETED"]) || []
-      set_mailbox_uidvalidity mailbox, uidvalidity
-      debug "; first time, downloading all messages... (Total: #{ids.size}) [#{ids.first} .. #{ids.last}]"
-    else
-      ids = @imap.uid_search(["NOT", "DELETED"]) || []
-      set_mailbox_uidvalidity mailbox, uidvalidity
-      debug "; uidvalidity mistmatch, downloading all messages again as punishment (Total: #{ids.size}) [#{ids.first} .. #{ids.last}]"
-    end
-    ids
-  end
-
   def poll
     info "Start poll for Gmail source #{@username}"
     begin
@@ -130,34 +48,8 @@ class GMail < Source
       mailboxes = imap_mailboxes
       mailboxes.each do |mailbox|
         ids = imap_fetch_new_ids(mailbox)
-        while ! (range = ids.shift 20).empty?
-          query = range.first .. range.last
-          debug "; fetching messages #{query.inspect} from gmail server"
-
-          data = []
-          Timeout.timeout(120) do
-            data = @imap.uid_fetch(query, BODY_DESCRIPTORS) || []
-          end
-
-          data.each_with_index do |msg,i|
-            labels = (msg.attr["X-GM-LABELS"] || []).map do |l|
-              gmail_label_to_sup_label(l)
-            end
-            flags = (msg.attr["FLAGS"] || []).map { |f| f.to_s.downcase.to_sym }
-            labels += [:unread] unless flags.include?(:seen)
-            body = msg.attr["RFC822"]
-            header = msg.attr["RFC822.HEADER"]
-            uid = msg.attr["X-GM-MSGID"] || msg.attr["UID"]
-            @db.put "#{uid}/body", body
-            @db.put "#{uid}/header", header
-            debug "; add message #{uid} LABELS: #{labels}  FLAGS: #{flags} "
-            yield :add,
-              :info => uid.to_i,
-              :labels => Set.new(labels).merge(labels),
-              :progress => i.to_f/@data.size
-            set_mailbox_uidlast(mailbox, msg.attr["UID"])
-          end
-        end
+        imap_fetch_new_msg(mailbox, ids, &Proc.new)
+        imap_update_old_msg
       end
     ensure
       imap_logout
@@ -191,6 +83,216 @@ class GMail < Source
     safely { @imap.append mailbox, message.string, [:Seen], Time.now }
   end
 
+  private
+
+  def imap_login(host, username, password, port = 993, ssl = true)
+    debug "; connecting to gmail..."
+    begin
+      @imap = Net::IMAP.new host, :port => port, :ssl => ssl
+    rescue TypeError
+      # 1.8 compatibility. sigh.
+      @imap = Net::IMAP.new host, port, ssl
+    end
+    debug "; login as #{username} ..."
+    @imap.login username, password
+  end
+
+  def imap_logout
+    @imap.logout if @imap and ! @imap.disconnected?
+  end
+
+  # Returns an array of interesting mailboxes.
+  #
+  # Currently this method only returns the All Mail folder. We could enhance
+  # this to return also the Sent, Trash and maybe also Spam folders.
+  def imap_mailboxes
+    mailboxes = @imap.list "", "*"
+    mailboxes.select { |m| m.attr.include?(:All) }.map { |m| m.name }
+  end
+
+  def get_mailbox_uidlast(mailbox)
+    leveldb_get("#{mailbox}/uidlast")
+  end
+
+  def set_mailbox_uidlast(mailbox, uidlast)
+    leveldb_put("#{mailbox}/uidlast", uidlast)
+  end
+
+  def get_mailbox_uidvalidity(mailbox)
+    leveldb_get("#{mailbox}/uidvalidity")
+  end
+
+  def set_mailbox_uidvalidity(mailbox, uidvalidity)
+    leveldb_put("#{mailbox}/uidvalidity", uidvalidity)
+  end
+
+  GMAIL_TO_SUP_LABELS = {
+    :Inbox => :inbox, :Sent => :sent, :Deleted => :deleted,
+    :Flagged => :starred, :Draft => :draft, :Spam => :spam
+  }
+
+  SUP_TO_GMAIL_LABELS = GMAIL_TO_SUP_LABELS.invert
+
+  def gmail_label_to_sup_label(label)
+    if GMAIL_TO_SUP_LABELS.has_key?(label)
+      GMAIL_TO_SUP_LABELS[label]
+    else
+      Net::IMAP.decode_utf7(label.to_s).to_sym
+    end
+  end
+
+  def sup_label_to_gmail_label(label)
+    if SUP_TO_GMAIL_LABELS.has_key?(label)
+      SUP_TO_GMAIL_LABELS[label]
+    else
+      Net::IMAP.encode_utf7(label.to_s)
+    end
+  end
+
+  def convert_gmail_labels(labels)
+    labels = (labels || []).map do |l|
+      gmail_label_to_sup_label(l)
+    end
+    Set.new(labels)
+  end
+
+  def convert_sup_labels(labels)
+    labels.map do |l|
+      sup_label_to_gmail_label(l)
+    end
+  end
+
+  # Fetch new messages from the Gmail account and add them to the local repo
+  # (leveldb) and the Xapian index.
+  def imap_fetch_new_ids(mailbox)
+    info "; fetch new messages from #{mailbox}"
+    @imap.examine folder
+
+    uidvalidity = @imap.responses["UIDVALIDITY"].first
+    uidnext = @imap.responses["UIDNEXT"].first
+    uidvaliditylast = get_mailbox_uidvalidity(mailbox)
+    uidlast = get_mailbox_uidlast(mailbox).to_i
+
+    ids = []
+
+    debug "; uidvalidity old: #{uidvaliditylast} (#{uidvaliditylast.class}) - new: #{uidvalidity} (#{uidvalidity.class})"
+
+    if uidvalidity == uidvaliditylast
+      ids = ((uidlast + 1) .. (uidnext -1)).to_a
+      debug "; downloading new messages... (Total: #{ids.size}) [#{ids.first} .. #{ids.last}]"
+    elsif uidvaliditylast.nil?
+      ids = @imap.uid_search(["NOT", "DELETED"]) || []
+      set_mailbox_uidvalidity mailbox, uidvalidity
+      debug "; first time, downloading all messages... (Total: #{ids.size}) [#{ids.first} .. #{ids.last}]"
+    else
+      ids = @imap.uid_search(["NOT", "DELETED"]) || []
+      set_mailbox_uidvalidity mailbox, uidvalidity
+      debug "; uidvalidity mistmatch, downloading all messages again as punishment (Total: #{ids.size}) [#{ids.first} .. #{ids.last}]"
+    end
+    ids
+  end
+
+  # This methods loads the labels of all messages in the Gmail account (in
+  # batches of 20 messages) and compares them with the local labels updating
+  # when differences are detected.
+  def imap_update_old_msg
+    info "; update flags on remote server"
+    @imap.select folder
+    ids = @imap.fetch(1..-1, "UID").map { |msg| msg.attr["UID"] } || []
+    debug "Update messages #{ids.first} #{ids.last}"
+    index = Redwood::Index.instance
+    raise FatalSourceError if index.nil?
+    while ! (range = ids.shift 20).empty?
+      query = range.first .. range.last
+      debug "; fetching flags #{query.inspect} from gmail server"
+
+      data = []
+      Timeout.timeout(120) do
+        data = @imap.uid_fetch(query, FLAG_DESCRIPTORS) || []
+      end
+
+      data.each do |msg|
+        uid = msg.attr["X-GM-MSGID"] || msg.attr["UID"]
+        info "; get message #{id} #{uid}"
+        old_msg = load_old_message(uid)
+        if old_msg.nil?
+          warn "; message #{uid} missing from index"
+          next
+        end
+
+        # The following code follows the offlineimap sync algorithm to sync the
+        # labels. In our implementation the local repository is the Xapian
+        # index, the remote repository is the remote Gmail and the status is
+        # stored in the leveldb database.
+        remote_labels = convert_gmail_labels(msg.attr["X-GM-LABELS"])
+        local_labels = old_msg.labels - [:attachment, :unread]
+        index_labels = raw_labels(uid)
+        debug "; remote: #{remote_labels} #{remote_labels.class} local: #{local_labels} #{local_labels.class} state: #{index_labels} #{index_labels.class}"
+
+        # Sync labels Remote -> Local
+        # Get differences bettwen remote and index labels
+        added_remote_labels = remote_labels - index_labels
+        removed_remote_labels = index_labels - remote_labels
+
+        debug "; added_remote #{added_remote_labels}  removed_remote: #{removed_remote_labels}"
+
+        local_labels = local_labels + added_remote_labels - removed_remote_labels
+        index_labels = index_labels + added_remote_labels - removed_remote_labels
+
+        # Sync labels Local -> Remote
+        # Get differences between index and local repo
+        added_local_labels = local_labels - index_labels
+        removed_local_labels = index_labels - local_labels
+
+        debug "; added_local #{added_local_labels}  removed_local: #{removed_local_labels}"
+
+        remote_labels = remote_labels + added_local_labels - removed_local_labels
+        index_labels = index_labels + added_local_labels - removed_local_labels
+
+        # Save the resulting labels
+        if ! added_remote_labels.empty? or ! removed_remote_labels.empty? or
+          ! added_local_labels.empty? or ! removed_local_labels.empty?
+          debug "; resulting remote: #{remote_labels} local: #{local_labels} state: #{index_labels}"
+          old_msg.labels = local_labels
+          index.update_message_state old_msg
+          @imap.store(msg.seqno, "X-GM-LABELS", convert_sup_labels(remote_labels)).inspect
+          leveldb_put "#{uid}/labels", index_labels
+        else
+          debug "; no label changes detected"
+        end
+      end
+    end
+    info "; finished updating flags on remote server"
+  end
+
+  def imap_fetch_new_msg(mailbox, ids, &block)
+    while ! (range = ids.shift 20).empty?
+      query = range.first .. range.last
+      debug "; fetching messages #{query.inspect} from gmail server"
+
+      data = []
+      Timeout.timeout(120) do
+        data = @imap.uid_fetch(query, BODY_DESCRIPTORS) || []
+      end
+
+      data.each_with_index do |msg,i|
+        labels = convert_gmail_labels(msg.attr["X-GM-LABELS"])
+        body = msg.attr["RFC822"]
+        header = msg.attr["RFC822.HEADER"]
+        uid = msg.attr["X-GM-MSGID"] || msg.attr["UID"]
+        leveldb_put "#{uid}/body", body
+        leveldb_put "#{uid}/header", header
+        leveldb_put "#{uid}/labels", labels
+        debug "; add message #{uid} LABELS: #{labels} "
+        Proc.new.call :add,
+          :info => uid.to_i,
+          :labels => labels,
+          :progress => i.to_f/@data.size
+        set_mailbox_uidlast(mailbox, msg.attr["UID"])
+      end
+    end
+  end
+
   # Returns the all folder name.
   def folder
     return @folder if @folder
@@ -206,18 +308,29 @@ class GMail < Source
   end
 
   def raw_header id
-    @mutex.synchronize do
-      @db.get("#{id}/header").gsub(/\r\n/, "\n")
-    end
+    leveldb_get("#{id}/header").gsub(/\r\n/, "\n")
   end
 
   def raw_message id
-    @mutex.synchronize do
-      @db.get("#{id}/body").gsub(/\r\n/, "\n")
-    end
+    leveldb_get("#{id}/body").gsub(/\r\n/, "\n")
+  end
+
+  def raw_labels id
+    leveldb_get("#{id}/labels")
   end
 
   private
+
+  # Loads message from index.
+  #
+  # This method first builds the message from the source using the UID of the
+  # email. Unfortunately the message that comes from the source has no labels so
+  # we need to load the message again from the Index using the message id
+  # instead.
+  def load_old_message(uid)
+    msg = Message.build_from_source(self, uid)
+    return Index.build_message(msg.id)
+  end
 
   def leveldb_put(key, val)
     @mutex.synchronize do
