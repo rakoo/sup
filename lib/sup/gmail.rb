@@ -14,11 +14,16 @@ module Redwood
 class GMail < Source
   include SerializeLabelsNicely
 
+  GMAIL_HOST = "imap.gmail.com".freeze
+  GMAIL_PORT = 993
+  GMAIL_USE_SSL = true
   FLAG_DESCRIPTORS = %w(UID FLAGS X-GM-LABELS X-GM-MSGID)
   BODY_DESCRIPTORS = %w(RFC822.HEADER UID FLAGS X-GM-LABELS X-GM-MSGID RFC822)
 
   attr_accessor :username, :password
   yaml_properties :uri, :username, :password, :usual, :archived, :id, :labels
+
+  def self.suggested_default_labels; [] end
 
   def initialize uri, username, password, usual=true, archived=false, id=nil, labels=[]
     raise ArgumentError, "username and password must be specified" unless username && password
@@ -28,9 +33,6 @@ class GMail < Source
 
     @username = username
     @password = password
-    @port = 993
-    @ssl = true
-    @mutex = Mutex.new
     @imap = nil
     @ids = []
     @data = []
@@ -44,7 +46,7 @@ class GMail < Source
   def poll
     info "Start poll for Gmail source #{@username}"
     begin
-      imap_login("imap.gmail.com", @username, @password, @port, @ssl)
+      imap_login(GMAIL_HOST, @username, @password, GMAIL_PORT, GMAIL_USE_SSL)
       mailboxes = imap_mailboxes
       mailboxes.each do |mailbox|
         ids = imap_fetch_new_ids(mailbox)
@@ -287,7 +289,7 @@ class GMail < Source
         Proc.new.call :add,
           :info => uid.to_i,
           :labels => labels,
-          :progress => i.to_f/@data.size
+          :progress => i.to_f/data.size
         set_mailbox_uidlast(mailbox, msg.attr["UID"])
       end
     end
