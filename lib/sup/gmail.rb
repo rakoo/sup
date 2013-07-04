@@ -52,7 +52,7 @@ class GMail < Source
       mailboxes.each do |mailbox|
         ids = imap_fetch_new_ids(mailbox)
         imap_fetch_new_msg(mailbox, ids, &Proc.new)
-        imap_update_old_msg
+        imap_update_old_msg(mailbox)
       end
     ensure
       imap_logout
@@ -105,28 +105,31 @@ class GMail < Source
   end
 
   # Returns an array of interesting mailboxes.
-  #
-  # Currently this method only returns the All Mail folder. We could enhance
-  # this to return also the Sent, Trash and maybe also Spam folders.
   def imap_mailboxes
     mailboxes = @imap.list "", "*"
-    mailboxes.select { |m| m.attr.include?(:All) }.map { |m| m.name }
+    debug "Mailboxes"
+    mailboxes.each do |mb|
+      debug ";; #{mb.name}  #{mb.attr}"
+    end
+    mailboxes.select do |m|
+      m.attr.include?(:All) or m.attr.include?(:Junk)
+    end
   end
 
   def get_mailbox_uidlast(mailbox)
-    leveldb_get("#{mailbox}/uidlast")
+    leveldb_get("#{mailbox.name}/uidlast")
   end
 
   def set_mailbox_uidlast(mailbox, uidlast)
-    leveldb_put("#{mailbox}/uidlast", uidlast)
+    leveldb_put("#{mailbox.name}/uidlast", uidlast)
   end
 
   def get_mailbox_uidvalidity(mailbox)
-    leveldb_get("#{mailbox}/uidvalidity")
+    leveldb_get("#{mailbox.name}/uidvalidity")
   end
 
   def set_mailbox_uidvalidity(mailbox, uidvalidity)
-    leveldb_put("#{mailbox}/uidvalidity", uidvalidity)
+    leveldb_put("#{mailbox.name}/uidvalidity", uidvalidity)
   end
 
   GMAIL_TO_SUP_LABELS = {
@@ -168,8 +171,8 @@ class GMail < Source
   # Fetch new messages from the Gmail account and add them to the local repo
   # (leveldb) and the Xapian index.
   def imap_fetch_new_ids(mailbox)
-    info "; fetch new messages from #{mailbox}"
-    @imap.examine folder
+    info "; Fetch new messages from #{mailbox.name} mailbox"
+    @imap.examine mailbox.name
 
     uidvalidity = @imap.responses["UIDVALIDITY"].first
     uidnext = @imap.responses["UIDNEXT"].first
@@ -198,9 +201,9 @@ class GMail < Source
   # This methods loads the labels of all messages in the Gmail account (in
   # batches of 20 messages) and compares them with the local labels updating
   # when differences are detected.
-  def imap_update_old_msg
-    info "; update flags on remote server"
-    @imap.select folder
+  def imap_update_old_msg(mailbox)
+    info "; Update old messages on #{mailbox.name}"
+    @imap.select mailbox.name
     ids = @imap.fetch(1..-1, "UID").map { |msg| msg.attr["UID"] } || []
     debug "Update messages #{ids.first} #{ids.last}"
     index = Redwood::Index.instance
@@ -216,7 +219,7 @@ class GMail < Source
 
       data.each do |msg|
         uid = msg.attr["X-GM-MSGID"] || msg.attr["UID"]
-        info "; get message #{id} #{uid}"
+        info "; get message #{uid}"
         old_msg = load_old_message(uid)
         if old_msg.nil?
           warn "; message #{uid} missing from index"
@@ -294,20 +297,6 @@ class GMail < Source
         set_mailbox_uidlast(mailbox, msg.attr["UID"])
       end
     end
-  end
-
-  # Returns the all folder name.
-  def folder
-    return @folder if @folder
-
-    # TODO: Investigate a way to ask the IMAP server to return only the mailbox
-    # with the \All property on it. Getting all mailboxes and then searching for
-    # that one property can be heavy for accounts with huge number of mailboxes.
-    mailboxes = @imap.list "", "*"
-
-    mailbox = mailboxes.select { |m| m.attr.include?(:All) }.first
-    raise FatalSourceError if mailbox.nil?
-    @folder = mailbox.name
   end
 
   def raw_header id
