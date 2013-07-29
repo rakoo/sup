@@ -7,7 +7,7 @@ module Redwood
     module Uri
       def self.build(components)
         components = components.dup
-        components[:path] = Path.expand(components[:path])
+        components[:path] = Path.expand(components[:path]) if components[:path]
         ::URI::Generic.build(components)
       end
     end
