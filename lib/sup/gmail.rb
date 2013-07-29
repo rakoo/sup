@@ -86,6 +86,18 @@ class GMail < Source
     safely { @imap.append mailbox, message.string, [:Seen], Time.now }
   end
 
+  def raw_header id
+    leveldb_get("#{id}/header").gsub(/\r\n/, "\n")
+  end
+
+  def raw_message id
+    leveldb_get("#{id}/body").gsub(/\r\n/, "\n")
+  end
+
+  def raw_labels id
+    leveldb_get("#{id}/labels")
+  end
+
   private
 
   def imap_login(host, username, password, port = 993, ssl = true)
@@ -308,18 +320,6 @@ class GMail < Source
     mailbox = mailboxes.select { |m| m.attr.include?(:All) }.first
     raise FatalSourceError if mailbox.nil?
     @folder = mailbox.name
-  end
-
-  def raw_header id
-    leveldb_get("#{id}/header").gsub(/\r\n/, "\n")
-  end
-
-  def raw_message id
-    leveldb_get("#{id}/body").gsub(/\r\n/, "\n")
-  end
-
-  def raw_labels id
-    leveldb_get("#{id}/labels")
   end
 
   private
