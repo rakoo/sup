@@ -721,7 +721,8 @@ protected
 
   def add_or_unhide m
     @ts_mutex.synchronize do
-      if (is_relevant?(m) || @ts.is_relevant?(m)) && !@ts.contains?(m)
+      if (is_relevant?(m) || @ts.is_relevant?(m))
+        @ts.remove_id m.id # remove thread to completely reload it
         @ts.load_thread_for_message m, @load_thread_opts
       end
 
