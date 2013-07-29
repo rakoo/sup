@@ -42,6 +42,7 @@ class GMail < Source
     @path = File.join(Redwood::BASE_DIR, "gmail", @username)
     FileUtils.mkdir_p(@path)
     @db = LevelDB::DB.new @path
+    @folder = nil
   end
 
   def poll
