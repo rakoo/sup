@@ -244,14 +244,14 @@ class GMail < Source
         remote_labels = convert_gmail_labels(msg.attr["X-GM-LABELS"])
         local_labels = old_msg.labels - [:attachment, :unread]
         index_labels = raw_labels(uid)
-        debug "; remote: #{remote_labels} #{remote_labels.class} local: #{local_labels} #{local_labels.class} state: #{index_labels} #{index_labels.class}"
+        debug "; remote: #{remote_labels} (#{remote_labels.class}), local: #{local_labels} (#{local_labels.class}), state: #{index_labels} (#{index_labels.class})"
 
         # Sync labels Remote -> Local
         # Get differences bettwen remote and index labels
         added_remote_labels = remote_labels - index_labels
         removed_remote_labels = index_labels - remote_labels
 
-        debug "; added_remote #{added_remote_labels}  removed_remote: #{removed_remote_labels}"
+        debug "; added_remote: #{added_remote_labels},  removed_remote: #{removed_remote_labels}"
 
         local_labels = local_labels + added_remote_labels - removed_remote_labels
         index_labels = index_labels + added_remote_labels - removed_remote_labels
@@ -261,7 +261,7 @@ class GMail < Source
         added_local_labels = local_labels - index_labels
         removed_local_labels = index_labels - local_labels
 
-        debug "; added_local #{added_local_labels}  removed_local: #{removed_local_labels}"
+        debug "; added_local: #{added_local_labels},  removed_local: #{removed_local_labels}"
 
         remote_labels = remote_labels + added_local_labels - removed_local_labels
         index_labels = index_labels + added_local_labels - removed_local_labels
@@ -269,10 +269,17 @@ class GMail < Source
         # Save the resulting labels
         if ! added_remote_labels.empty? or ! removed_remote_labels.empty? or
           ! added_local_labels.empty? or ! removed_local_labels.empty?
-          debug "; resulting remote: #{remote_labels} local: #{local_labels} state: #{index_labels}"
+          debug "; resulting remote: #{remote_labels}, local: #{local_labels}, state: #{index_labels}"
           old_msg.labels = local_labels
-          index.update_message_state old_msg
-          @imap.store(msg.seqno, "X-GM-LABELS", convert_sup_labels(remote_labels)).inspect
+
+          if !added_local_labels.empty? or !removed_local_labels.empty?
+            index.update_message_state old_msg
+          end
+
+          if !added_remote_labels.empty? or !removed_remote_labels.empty?
+            @imap.store(msg.seqno, "X-GM-LABELS", convert_sup_labels(remote_labels)).inspect
+          end
+
           leveldb_put "#{uid}/labels", index_labels
         else
           debug "; no label changes detected"
