@@ -52,9 +52,10 @@ class GMail < Source
       imap_login(GMAIL_HOST, @username, @password, GMAIL_PORT, GMAIL_USE_SSL)
       mailboxes = imap_mailboxes
       mailboxes.each do |mailbox|
+        # yield ids/actions in sub-methods
         ids = imap_fetch_new_ids(mailbox)
         imap_fetch_new_msg(mailbox, ids, &Proc.new)
-        imap_update_old_msg if @sync_existing
+        imap_update_old_msg &Proc.new if @sync_existing
       end
     ensure
       imap_logout
@@ -231,7 +232,7 @@ class GMail < Source
         data = @imap.uid_fetch(query, FLAG_DESCRIPTORS) || []
       end
 
-      data.each do |msg|
+      data.each_with_index do |msg,i|
         uid = msg.attr["X-GM-MSGID"] || msg.attr["UID"]
         info "; get message #{uid}"
         old_msg = load_old_message(uid)
@@ -284,6 +285,13 @@ class GMail < Source
           end
 
           leveldb_put "#{uid}/labels", index_labels
+
+          # yield the messages as :add
+          Proc.new.call :add,
+            :info => uid.to_i,
+            :labels => old_msg.labels,
+            :progress => i.to_f/data.size
+
         else
           debug "; no label changes detected"
         end

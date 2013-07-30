@@ -194,9 +194,14 @@ EOS
             ## We need to add or unhide the message when it either did not exist
             ## before at all or when it was updated. We do *not* add/unhide when
             ## the same message was found at a different location
-            if !old_m or not old_m.locations.member? m.location
-              UpdateManager.relay self, :added, m
-            end
+            #if !old_m or not old_m.locations.member? m.location
+              #UpdateManager.relay self, :added, m
+            #end
+
+            ## Update message regardless when it pops up in a new location
+            ## TODO: Why do locations change with gmail source?
+            UpdateManager.relay self, :added, m
+
           when :delete
             Index.each_message :location => [source.id, args[:info]] do |m|
               m.locations.delete Location.new(source, args[:info])
