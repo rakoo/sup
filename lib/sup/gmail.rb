@@ -22,11 +22,11 @@ class GMail < Source
   BODY_DESCRIPTORS = %w(RFC822.HEADER UID FLAGS X-GM-LABELS X-GM-MSGID RFC822)
 
   attr_accessor :username, :password
-  yaml_properties :uri, :username, :password, :usual, :archived, :id, :labels
+  yaml_properties :uri, :username, :password, :usual, :archived, :id, :sync_existing, :labels
 
   def self.suggested_default_labels; [] end
 
-  def initialize uri, username, password, usual=true, archived=false, id=nil, labels=[]
+  def initialize uri, username, password, usual=true, archived=false, id=nil, sync_existing=true, labels=[]
     raise ArgumentError, "username and password must be specified" unless username && password
     @uri = URI(uri)
     raise ArgumentError, "not a gmail URI" unless @uri.scheme == "gmail"
@@ -43,6 +43,7 @@ class GMail < Source
     FileUtils.mkdir_p(@path)
     @db = LevelDB::DB.new @path
     @folder = nil
+    @sync_existing = sync_existing
   end
 
   def poll
@@ -54,7 +55,7 @@ class GMail < Source
         # yield ids/actions in sub-methods
         ids = imap_fetch_new_ids(mailbox)
         imap_fetch_new_msg(mailbox, ids, &Proc.new)
-        imap_update_old_msg &Proc.new
+        imap_update_old_msg &Proc.new if @sync_existing
       end
     ensure
       imap_logout
