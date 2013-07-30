@@ -22,11 +22,13 @@ class GMail < Source
   BODY_DESCRIPTORS = %w(RFC822.HEADER UID FLAGS X-GM-LABELS X-GM-MSGID RFC822)
 
   attr_accessor :username, :password
-  yaml_properties :uri, :username, :password, :usual, :archived, :id, :sync_existing, :labels
+  yaml_properties :uri, :username, :password, :usual, :archived, :id,
+    :sync_back, :sync_spam, :labels
 
   def self.suggested_default_labels; [] end
 
-  def initialize uri, username, password, usual=true, archived=false, id=nil, sync_existing=true, labels=[]
+  def initialize uri, username, password, usual=true, archived=false, id=nil,
+    sync_back=true, sync_spam=false, labels=[]
     raise ArgumentError, "username and password must be specified" unless username && password
     @uri = URI(uri)
     raise ArgumentError, "not a gmail URI" unless @uri.scheme == "gmail"
@@ -42,20 +44,27 @@ class GMail < Source
     @path = File.join(Redwood::BASE_DIR, "gmail", @username)
     FileUtils.mkdir_p(@path)
     @db = LevelDB::DB.new @path
-    @sync_existing = sync_existing
+    @sync_back = sync_back
+    @sync_spam = sync_spam
   end
 
   def poll
     info "Start poll for Gmail source #{@username}"
     begin
       imap_login(GMAIL_HOST, @username, @password, GMAIL_PORT, GMAIL_USE_SSL)
-      mailboxes = imap_mailboxes
-      mailboxes.each do |mailbox|
-        # yield ids/actions in sub-methods
-        ids = imap_fetch_new_ids(mailbox)
-        imap_fetch_new_msg(mailbox, ids, &Proc.new)
-        imap_update_old_msg &Proc.new if @sync_existing
+
+      debug "; Sync All mailbox"
+      ids = imap_fetch_new_ids(imap_all_mailbox)
+      imap_fetch_new_msg(imap_all_mailbox, ids, &Proc.new)
+      imap_update_old_msg(imap_all_mailbox, &Proc.new) if @sync_back
+
+      if @sync_spam
+        # TODO: If a user sends a message to the spam folder in the web
+        # interface the only way to find this change and apply it to our local
+        # index is by inspecting the spam folder.
+        imap_update_old_msg(imap_spam_mailbox, &Proc.new) if @sync_back
       end
+
     ensure
       imap_logout
     end
@@ -118,16 +127,31 @@ class GMail < Source
     @imap.logout if @imap and ! @imap.disconnected?
   end
 
-  # Returns an array of interesting mailboxes.
+  # Retrieve and memoize the list of IMAP mailboxes that for Gmail
+  # correspond to the list of labels.
   def imap_mailboxes
-    mailboxes = @imap.list "", "*"
-    debug "Mailboxes"
-    mailboxes.each do |mb|
-      debug ";; #{mb.name}  #{mb.attr}"
-    end
-    mailboxes.select do |m|
-      m.attr.include?(:All) or m.attr.include?(:Junk)
-    end
+    @mailboxes ||= @imap.list "", "*"
+  end
+
+  # Retrieve the All mailbox
+  def imap_all_mailbox
+    @imap_all_mailbox ||= imap_mailboxes.select do |m|
+      m.attr.include?(:All)
+    end.first
+  end
+
+  # Retrieve the Spam mailbox
+  def imap_spam_mailbox
+    @imap_spam_mailbox ||= imap_mailboxes.select do |m|
+      m.attr.include?(:Junk)
+    end.first
+  end
+
+  # Retrieve the Spam mailbox
+  def imap_trash_mailbox
+    @imap_spam_mailbox ||= imap_mailboxes.select do |m|
+      m.attr.include?(:Trash)
+    end.first
   end
 
   def get_mailbox_uidlast(mailbox)
