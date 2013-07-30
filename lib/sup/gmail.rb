@@ -42,7 +42,6 @@ class GMail < Source
     @path = File.join(Redwood::BASE_DIR, "gmail", @username)
     FileUtils.mkdir_p(@path)
     @db = LevelDB::DB.new @path
-    @folder = nil
     @sync_existing = sync_existing
   end
 
@@ -341,20 +340,6 @@ class GMail < Source
   end
 
   private
-
-  # Returns the all folder name.
-  def folder
-    return @folder if @folder
-
-    # TODO: Investigate a way to ask the IMAP server to return only the mailbox
-    # with the \All property on it. Getting all mailboxes and then searching for
-    # that one property can be heavy for accounts with huge number of mailboxes.
-    mailboxes = @imap.list "", "*"
-
-    mailbox = mailboxes.select { |m| m.attr.include?(:All) }.first
-    raise FatalSourceError if mailbox.nil?
-    @folder = mailbox.name
-  end
 
   # Loads message from index.
   #
