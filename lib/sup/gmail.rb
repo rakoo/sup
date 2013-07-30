@@ -83,6 +83,8 @@ class GMail < Source
   # TODO: Store this somewhere and execute the actual append to GMail using
   # UIDPLUS during the polling.
   def store_message date, from_email, &block
+    return # doesn't work atm, message is stored when sent through gmail
+           # and retrieved at next poll
     message = StringIO.new
     yield message
     message.string.gsub! /\n/, "\r\n"
