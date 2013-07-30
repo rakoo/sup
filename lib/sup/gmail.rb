@@ -22,11 +22,11 @@ class GMail < Source
   BODY_DESCRIPTORS = %w(RFC822.HEADER UID FLAGS X-GM-LABELS X-GM-MSGID RFC822)
 
   attr_accessor :username, :password
-  yaml_properties :uri, :username, :password, :usual, :archived, :id, :labels
+  yaml_properties :uri, :username, :password, :usual, :archived, :id, :sync_existing, :labels
 
   def self.suggested_default_labels; [] end
 
-  def initialize uri, username, password, usual=true, archived=false, id=nil, labels=[]
+  def initialize uri, username, password, usual=true, archived=false, id=nil, sync_existing=true, labels=[]
     raise ArgumentError, "username and password must be specified" unless username && password
     @uri = URI(uri)
     raise ArgumentError, "not a gmail URI" unless @uri.scheme == "gmail"
@@ -42,6 +42,8 @@ class GMail < Source
     @path = File.join(Redwood::BASE_DIR, "gmail", @username)
     FileUtils.mkdir_p(@path)
     @db = LevelDB::DB.new @path
+    @folder = nil
+    @sync_existing = sync_existing
   end
 
   def poll
@@ -52,7 +54,7 @@ class GMail < Source
       mailboxes.each do |mailbox|
         ids = imap_fetch_new_ids(mailbox)
         imap_fetch_new_msg(mailbox, ids, &Proc.new)
-        imap_update_old_msg(mailbox)
+        imap_update_old_msg if @sync_existing
       end
     ensure
       imap_logout
@@ -83,7 +85,19 @@ class GMail < Source
     message = StringIO.new
     yield message
     message.string.gsub! /\n/, "\r\n"
-    safely { @imap.append mailbox, message.string, [:Seen], Time.now }
+    @imap.append mailbox, message.string, [:Seen], Time.now
+  end
+
+  def raw_header id
+    leveldb_get("#{id}/header").gsub(/\r\n/, "\n")
+  end
+
+  def raw_message id
+    leveldb_get("#{id}/body").gsub(/\r\n/, "\n")
+  end
+
+  def raw_labels id
+    leveldb_get("#{id}/labels")
   end
 
   private
@@ -233,14 +247,14 @@ class GMail < Source
         remote_labels = convert_gmail_labels(msg.attr["X-GM-LABELS"])
         local_labels = old_msg.labels - [:attachment, :unread]
         index_labels = raw_labels(uid)
-        debug "; remote: #{remote_labels} #{remote_labels.class} local: #{local_labels} #{local_labels.class} state: #{index_labels} #{index_labels.class}"
+        debug "; remote: #{remote_labels} (#{remote_labels.class}), local: #{local_labels} (#{local_labels.class}), state: #{index_labels} (#{index_labels.class})"
 
         # Sync labels Remote -> Local
         # Get differences bettwen remote and index labels
         added_remote_labels = remote_labels - index_labels
         removed_remote_labels = index_labels - remote_labels
 
-        debug "; added_remote #{added_remote_labels}  removed_remote: #{removed_remote_labels}"
+        debug "; added_remote: #{added_remote_labels},  removed_remote: #{removed_remote_labels}"
 
         local_labels = local_labels + added_remote_labels - removed_remote_labels
         index_labels = index_labels + added_remote_labels - removed_remote_labels
@@ -250,7 +264,7 @@ class GMail < Source
         added_local_labels = local_labels - index_labels
         removed_local_labels = index_labels - local_labels
 
-        debug "; added_local #{added_local_labels}  removed_local: #{removed_local_labels}"
+        debug "; added_local: #{added_local_labels},  removed_local: #{removed_local_labels}"
 
         remote_labels = remote_labels + added_local_labels - removed_local_labels
         index_labels = index_labels + added_local_labels - removed_local_labels
@@ -258,10 +272,17 @@ class GMail < Source
         # Save the resulting labels
         if ! added_remote_labels.empty? or ! removed_remote_labels.empty? or
           ! added_local_labels.empty? or ! removed_local_labels.empty?
-          debug "; resulting remote: #{remote_labels} local: #{local_labels} state: #{index_labels}"
+          debug "; resulting remote: #{remote_labels}, local: #{local_labels}, state: #{index_labels}"
           old_msg.labels = local_labels
-          index.update_message_state old_msg
-          @imap.store(msg.seqno, "X-GM-LABELS", convert_sup_labels(remote_labels)).inspect
+
+          if !added_local_labels.empty? or !removed_local_labels.empty?
+            index.update_message_state old_msg
+          end
+
+          if !added_remote_labels.empty? or !removed_remote_labels.empty?
+            @imap.store(msg.seqno, "X-GM-LABELS", convert_sup_labels(remote_labels)).inspect
+          end
+
           leveldb_put "#{uid}/labels", index_labels
         else
           debug "; no label changes detected"
@@ -312,6 +333,20 @@ class GMail < Source
   end
 
   private
+
+  # Returns the all folder name.
+  def folder
+    return @folder if @folder
+
+    # TODO: Investigate a way to ask the IMAP server to return only the mailbox
+    # with the \All property on it. Getting all mailboxes and then searching for
+    # that one property can be heavy for accounts with huge number of mailboxes.
+    mailboxes = @imap.list "", "*"
+
+    mailbox = mailboxes.select { |m| m.attr.include?(:All) }.first
+    raise FatalSourceError if mailbox.nil?
+    @folder = mailbox.name
+  end
 
   # Loads message from index.
   #
