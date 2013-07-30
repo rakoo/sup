@@ -85,7 +85,7 @@ class GMail < Source
     message = StringIO.new
     yield message
     message.string.gsub! /\n/, "\r\n"
-    safely { @imap.append mailbox, message.string, [:Seen], Time.now }
+    @imap.append mailbox, message.string, [:Seen], Time.now
   end
 
   def raw_header id
