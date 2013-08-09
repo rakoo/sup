@@ -354,18 +354,6 @@ class GMail < Source
     end
   end
 
-  def raw_header id
-    leveldb_get("#{id}/header").gsub(/\r\n/, "\n")
-  end
-
-  def raw_message id
-    leveldb_get("#{id}/body").gsub(/\r\n/, "\n")
-  end
-
-  def raw_labels id
-    leveldb_get("#{id}/labels")
-  end
-
   private
 
   # Loads message from index.
