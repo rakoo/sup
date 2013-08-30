@@ -86,8 +86,6 @@ class GMail < Source
     safely { @imap.append mailbox, message.string, [:Seen], Time.now }
   end
 
-  private
-
   def imap_login(host, username, password, port = 993, ssl = true)
     debug "; connecting to gmail..."
     begin
