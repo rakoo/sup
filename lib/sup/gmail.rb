@@ -48,6 +48,7 @@ class GMail < Source
     info "Start poll for Gmail source #{@username}"
     begin
       imap_login(GMAIL_HOST, @username, @password, GMAIL_PORT, GMAIL_USE_SSL)
+      return unless @imap
       mailboxes = imap_mailboxes
       mailboxes.each do |mailbox|
         ids = imap_fetch_new_ids(mailbox)
@@ -93,9 +94,11 @@ class GMail < Source
     rescue TypeError
       # 1.8 compatibility. sigh.
       @imap = Net::IMAP.new host, port, ssl
+    rescue SocketError # No connectivity
+      @imap = nil
     end
     debug "; login as #{username} ..."
-    @imap.login username, password
+    @imap.login username, password if @imap
   end
 
   def imap_logout
