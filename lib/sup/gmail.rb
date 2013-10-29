@@ -130,9 +130,11 @@ class GMail < Source
     leveldb_put("#{mailbox}/uidvalidity", uidvalidity)
   end
 
+  GMAIL_IMMUTABLE_LABELS = [:Sent, :muted, :Todo, :Inbox]
+
   GMAIL_TO_SUP_LABELS = {
     :Inbox => :inbox, :Sent => :sent, :Deleted => :deleted,
-    :Flagged => :starred, :Draft => :draft, :Spam => :spam
+    :Flagged => :starred, :Draft => :draft, :Spam => :spam, :Important => :important
   }
 
   SUP_TO_GMAIL_LABELS = GMAIL_TO_SUP_LABELS.invert
@@ -141,15 +143,17 @@ class GMail < Source
     if GMAIL_TO_SUP_LABELS.has_key?(label)
       GMAIL_TO_SUP_LABELS[label]
     else
-      Net::IMAP.decode_utf7(label.to_s).to_sym
+      Net::IMAP.decode_utf7(label.to_s).downcase.to_sym
     end
   end
 
   def sup_label_to_gmail_label(label)
-    if SUP_TO_GMAIL_LABELS.has_key?(label)
+    if GMAIL_IMMUTABLE_LABELS.member?(label)
+      nil
+    elsif SUP_TO_GMAIL_LABELS.has_key?(label)
       SUP_TO_GMAIL_LABELS[label]
     else
-      Net::IMAP.encode_utf7(label.to_s)
+      Net::IMAP.encode_utf7(label.to_s).downcase
     end
   end
 
@@ -163,7 +167,7 @@ class GMail < Source
   def convert_sup_labels(labels)
     labels.map do |l|
       sup_label_to_gmail_label(l)
-    end
+    end.compact
   end
 
   # Fetch new messages from the Gmail account and add them to the local repo
