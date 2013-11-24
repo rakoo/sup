@@ -91,14 +91,14 @@ class GMail < Source
     debug "; connecting to gmail..."
     begin
       @imap = Net::IMAP.new host, :port => port, :ssl => ssl
+      debug "; login as #{username} ..."
+      @imap.login username, password
     rescue TypeError
       # 1.8 compatibility. sigh.
       @imap = Net::IMAP.new host, port, ssl
     rescue SocketError # No connectivity
       @imap = nil
     end
-    debug "; login as #{username} ..."
-    @imap.login username, password if @imap
   end
 
   def imap_logout
