@@ -73,10 +73,11 @@ def add_source
       [Redwood::Maildir.suggest_labels_for(fn),
        { :scheme => "maildir", :path => fn }]
     when :gmail
-      username = axe "What's your account name ?"
-      puts "Ok, got your username."
+      username = axe "What's your account name?"
+      hostname = axe "What's your domain name?", "gmail.com"
+      puts "Ok, got your username and domain name."
       [Redwood::GMail.suggested_default_labels,
-        {:scheme => "gmail", :userinfo => username, :host => "gmail.com" }]
+        {:scheme => "gmail", :userinfo => username, :host => hostname }]
     end
 
     uri = begin

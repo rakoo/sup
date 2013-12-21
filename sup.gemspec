@@ -58,6 +58,7 @@ SUP: If you are upgrading Sup from before version 0.14.0: Please
     s.add_runtime_dependency "chronic", "~> 0.9.1"
     s.add_runtime_dependency "leveldb-ruby"
     s.add_runtime_dependency "snappy"
+    s.add_runtime_dependency "unicode", "~> 0.4.4"
 
     s.add_development_dependency "bundler", "~> 1.3"
     s.add_development_dependency "rake"

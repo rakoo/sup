@@ -59,7 +59,7 @@ module Net
         return TaggedResponse.new(tag, name, resp_text, @str)
       end
 
-      def msg_att(n)
+      def msg_att
         match(T_LPAR)
         attr = {}
         while true
@@ -94,7 +94,7 @@ module Net
           when /\A(?:X-GM-THRID)\z/ni  # Added X-GM-THRID extension
             name, val = uid_data
           else
-            parse_error("unknown attribute `%s' for %n", token.value, n)
+            parse_error("unknown attribute `%s'", token.value)
           end
           attr[name] = val
         end

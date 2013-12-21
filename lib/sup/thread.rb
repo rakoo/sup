@@ -324,6 +324,7 @@ class ThreadSet
     c = @messages[mid]
     remove_container c
     prune_thread_of c
+    @messages.delete mid # remove message from loaded messages in case it has changed in index
   end
 
   def remove_thread_containing_id mid
