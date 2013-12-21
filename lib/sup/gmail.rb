@@ -177,7 +177,7 @@ class GMail < Source
     @imap.examine folder
 
     uidvalidity = @imap.responses["UIDVALIDITY"].first
-    uidnext = @imap.responses["UIDNEXT"].first
+    uidnext = @imap.responses["UIDNEXT"].first.to_i
     uidvaliditylast = get_mailbox_uidvalidity(mailbox)
     uidlast = get_mailbox_uidlast(mailbox).to_i
 
