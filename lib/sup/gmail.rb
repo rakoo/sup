@@ -347,9 +347,11 @@ class GMail < Source
   end
 
   def leveldb_get(key)
-    val = @db.get(key)
-    return nil if val.nil?
-    return YAML::load(val)
+    val = nil
+    @mutex.synchronize do
+      val = @db.get(key)
+    end
+    return val.nil? ? nil : YAML::load(val)
   end
 end
 
